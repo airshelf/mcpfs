@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	mcpfuse "github.com/airshelf/mcpfs/internal/fuse"
@@ -17,11 +18,14 @@ func usage() {
 Usage:
   mcpfs <mountpoint> -- <command> [args...]
   mcpfs -u <mountpoint>
+  mcpfs migrate [--apply|--undo|--json]
 
 Examples:
   mcpfs /mnt/vercel -- mcpfs-vercel
   mcpfs /mnt/github -- mcpfs-github
   mcpfs -u /mnt/vercel
+  mcpfs migrate          # preview plugin migration
+  mcpfs migrate --apply  # disable MCP plugins, use mcpfs instead
 
 Flags:
   -u          unmount
@@ -33,6 +37,27 @@ func main() {
 	args := os.Args[1:]
 	if len(args) == 0 {
 		usage()
+	}
+
+	if args[0] == "migrate" {
+		migrateBin := "mcpfs-migrate"
+		if bin, err := os.Executable(); err == nil {
+			candidate := filepath.Join(filepath.Dir(bin), "mcpfs-migrate")
+			if _, err := os.Stat(candidate); err == nil {
+				migrateBin = candidate
+			}
+		}
+		migrateCmd := exec.Command(migrateBin, args[1:]...)
+		migrateCmd.Stdout = os.Stdout
+		migrateCmd.Stderr = os.Stderr
+		if err := migrateCmd.Run(); err != nil {
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				os.Exit(exitErr.ExitCode())
+			}
+			fmt.Fprintf(os.Stderr, "mcpfs: migrate: %v\n", err)
+			os.Exit(1)
+		}
+		return
 	}
 
 	if args[0] == "-u" {

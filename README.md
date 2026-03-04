@@ -173,6 +173,16 @@ ls /mnt/mcpfs/
 # github/  linear/  npm/  posthog/  stripe/  ...
 ```
 
+### Migrating from Claude Code MCP plugins
+
+If you're using Claude Code with MCP plugins (PostHog, GitHub, Linear, etc.), mcpfs can replace them:
+
+```bash
+mcpfs migrate          # preview: shows which plugins would be disabled
+mcpfs migrate --apply  # disable plugins, save ~25,000 tokens/conversation
+mcpfs migrate --undo   # restore from backup
+```
+
 ## Write your own server
 
 Each server is a Go program using the `mcpserve` framework:
@@ -234,6 +244,7 @@ internal/fuse/      # FUSE filesystem implementation
 servers/            # 11 MCP resource servers
 bin/mcpfs-mount     # Mount all servers at /mnt/mcpfs/
 bin/mcpfs-env       # Auth token loader
+bin/mcpfs-migrate   # Migrate from Claude Code MCP plugins to mcpfs
 ```
 
 ## Requirements

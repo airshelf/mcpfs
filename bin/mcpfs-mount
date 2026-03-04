@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+# mcpfs-mount: Mount MCP resource servers as filesystems.
+#
+# Usage:
+#   mcpfs-mount              # mount all with available credentials
+#   mcpfs-mount posthog      # mount only posthog
+#   mcpfs-mount -u           # unmount all
+#
+# Mount point: /mnt/mcpfs/<service>
+
+set -euo pipefail
+
+MCPFS_BIN="$(cd "$(dirname "$0")" && pwd)"
+MOUNT_ROOT="/mnt/mcpfs"
+PID_DIR="/tmp/mcpfs-pids"
+
+if [[ "${1:-}" == "-u" ]]; then
+    echo "Unmounting all mcpfs mounts..."
+    for pidfile in "$PID_DIR"/*.pid; do
+        [[ -f "$pidfile" ]] || continue
+        name=$(basename "$pidfile" .pid)
+        fusermount -u "$MOUNT_ROOT/$name" 2>/dev/null && echo "  unmounted $name" || true
+        kill "$(cat "$pidfile")" 2>/dev/null || true
+        rm -f "$pidfile"
+    done
+    exit 0
+fi
+
+mkdir -p "$PID_DIR"
+
+# GitHub token fallback
+if [[ -z "${GITHUB_TOKEN:-}" ]] && command -v gh &>/dev/null; then
+    export GITHUB_TOKEN="$(gh auth token 2>/dev/null || true)"
+fi
+
+mount_one() {
+    local name="$1"
+
+    if [[ ! -x "$MCPFS_BIN/mcpfs-$name" ]]; then
+        echo "  skip $name (no binary)"
+        return
+    fi
+
+    if mountpoint -q "$MOUNT_ROOT/$name" 2>/dev/null; then
+        echo "  skip $name (already mounted)"
+        return
+    fi
+
+    sudo mkdir -p "$MOUNT_ROOT/$name"
+    sudo chown "$(id -u):$(id -g)" "$MOUNT_ROOT/$name"
+
+    "$MCPFS_BIN/mcpfs" "$MOUNT_ROOT/$name" -- "$MCPFS_BIN/mcpfs-$name" &
+    echo "$!" > "$PID_DIR/$name.pid"
+    echo "  mounted $name (pid $!)"
+}
+
+check_env() {
+    local var="$1"
+    [[ -z "$var" ]] && return 0
+    [[ -n "${!var:-}" ]] && return 0
+    return 1
+}
+
+# Each server: name, required env var (empty = none)
+ALL_SERVERS="github:GITHUB_TOKEN vercel:VERCEL_TOKEN docker: posthog:POSTHOG_API_KEY stripe:STRIPE_API_KEY linear:LINEAR_API_KEY notion:NOTION_API_KEY npm: postgres:DATABASE_URL k8s: slack:SLACK_TOKEN"
+
+targets="${*:-}"
+
+echo "mcpfs-mount: mounting to $MOUNT_ROOT/"
+
+for entry in $ALL_SERVERS; do
+    name="${entry%%:*}"
+    env_var="${entry#*:}"
+
+    # Filter if targets specified
+    if [[ -n "$targets" ]] && ! echo " $targets " | grep -q " $name "; then
+        continue
+    fi
+
+    # Check env
+    if [[ -n "$env_var" ]] && ! check_env "$env_var"; then
+        echo "  skip $name ($env_var not set)"
+        continue
+    fi
+
+    # Docker: check socket
+    if [[ "$name" == "docker" ]] && [[ ! -S /var/run/docker.sock ]]; then
+        echo "  skip docker (no socket)"
+        continue
+    fi
+
+    # K8s: check kubectl
+    if [[ "$name" == "k8s" ]] && ! command -v kubectl &>/dev/null; then
+        echo "  skip k8s (no kubectl)"
+        continue
+    fi
+
+    mount_one "$name"
+done
+
+sleep 2
+
+echo ""
+echo "Mounts:"
+for d in "$MOUNT_ROOT"/*/; do
+    [[ -d "$d" ]] && mountpoint -q "$d" 2>/dev/null && echo "  $d"
+done
+echo ""
+echo "Try:  ls $MOUNT_ROOT/"
+echo "      cat $MOUNT_ROOT/posthog/dashboards.json | jq '.[].name'"
+echo "Unmount: $(basename "$0") -u"

@@ -103,8 +103,15 @@ cat /tmp/mnt/github/repos
 fusermount -u /tmp/mnt/github
 ```
 
+## Migration from Claude Code plugins
+
+`mcpfs migrate` scans `~/.claude/settings.json`, disables MCP plugins that mcpfs replaces.
+- `bin/mcpfs-migrate` — shell script, dry-run by default, `--apply` to execute, `--undo` to revert
+- Keeps plugins with skills (Notion, Stripe), disables pure-tool plugins (PostHog, GitHub, Linear, Vercel)
+
 ## Dependencies
 
 - `github.com/hanwen/go-fuse/v2` — FUSE bindings
 - `github.com/lib/pq` — PostgreSQL driver (postgres server only)
 - No other external dependencies. HTTP clients use `net/http`.
+

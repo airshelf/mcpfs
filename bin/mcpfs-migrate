@@ -1,0 +1,311 @@
+#!/usr/bin/env bash
+# mcpfs-migrate: Migrate Claude Code MCP plugins to mcpfs.
+#
+# Usage:
+#   mcpfs-migrate              # preview (dry-run)
+#   mcpfs-migrate --apply      # execute migration
+#   mcpfs-migrate --undo       # restore from backup
+#   mcpfs-migrate --json       # JSON output
+#
+# Exit codes: 0=success, 1=error, 2=usage, 3=nothing to do
+
+set -euo pipefail
+
+SETTINGS="$HOME/.claude/settings.json"
+BACKUP="$HOME/.claude/settings.json.mcpfs-backup"
+CLAUDE_MD=""
+MODE="preview"
+JSON=false
+
+# Plugin mapping: name|has_skills|tool_count
+# has_skills=yes means keep plugin enabled (it has valuable skills beyond MCP tools)
+PLUGINS=(
+  "posthog|no|67"
+  "github|no|43"
+  "linear|no|7"
+  "vercel|no|12"
+  "stripe|yes|28"
+  "notion|yes|0"
+)
+
+usage() {
+  cat >&2 <<'EOF'
+mcpfs-migrate — migrate Claude Code MCP plugins to mcpfs
+
+Usage:
+  mcpfs-migrate              preview changes (dry-run)
+  mcpfs-migrate --apply      execute migration
+  mcpfs-migrate --undo       restore from backup
+  mcpfs-migrate --json       JSON output
+
+Flags:
+  --apply          execute migration
+  --undo           restore settings.json from backup
+  --json           machine-readable JSON output
+  --claude-md PATH explicit CLAUDE.md path
+  --help           show this help
+EOF
+  exit 2
+}
+
+die() { echo "mcpfs-migrate: $1" >&2; exit 1; }
+
+# Parse args
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --apply)    MODE="apply"; shift ;;
+    --undo)     MODE="undo"; shift ;;
+    --json)     JSON=true; shift ;;
+    --claude-md) CLAUDE_MD="$2"; shift 2 ;;
+    --help|-h)  usage ;;
+    *)          echo "mcpfs-migrate: unknown flag: $1" >&2; usage ;;
+  esac
+done
+
+# Validate
+command -v jq &>/dev/null || die "jq is required (brew install jq / apt install jq)"
+[[ -f "$SETTINGS" ]] || die "settings.json not found at $SETTINGS"
+
+# Auto-detect CLAUDE.md: prefer project, fallback to global
+if [[ -z "$CLAUDE_MD" ]]; then
+  if [[ -f "CLAUDE.md" ]]; then
+    CLAUDE_MD="CLAUDE.md"
+  elif [[ -f "$HOME/.claude/CLAUDE.md" ]]; then
+    CLAUDE_MD="$HOME/.claude/CLAUDE.md"
+  fi
+fi
+
+# Scan plugins: find matching enabledPlugins keys
+scan_plugins() {
+  local results=()
+  for entry in "${PLUGINS[@]}"; do
+    local name="${entry%%|*}"
+    local rest="${entry#*|}"
+    local has_skills="${rest%%|*}"
+    local tool_count="${rest#*|}"
+
+    # Find matching key in enabledPlugins (case-insensitive substring)
+    local key
+    key=$(jq -r ".enabledPlugins // {} | keys[] | select(test(\"$name\"; \"i\"))" "$SETTINGS" 2>/dev/null | head -1)
+
+    if [[ -z "$key" ]]; then
+      results+=("$name|$has_skills|$tool_count|not_found|")
+      continue
+    fi
+
+    local enabled
+    enabled=$(jq -r ".enabledPlugins[\"$key\"]" "$SETTINGS")
+
+    if [[ "$enabled" == "true" ]]; then
+      if [[ "$has_skills" == "yes" ]]; then
+        results+=("$name|$has_skills|$tool_count|keep|$key")
+      else
+        results+=("$name|$has_skills|$tool_count|disable|$key")
+      fi
+    else
+      results+=("$name|$has_skills|$tool_count|already_disabled|$key")
+    fi
+  done
+  printf '%s\n' "${results[@]}"
+}
+
+# Count tokens saved (rough: ~300 tokens per tool)
+tokens_saved() {
+  local total=0
+  while IFS='|' read -r name has_skills tool_count action key; do
+    if [[ "$action" == "disable" ]]; then
+      total=$((total + tool_count * 300))
+    fi
+  done
+  echo "$total"
+}
+
+# Preview mode
+preview() {
+  local scan
+  scan=$(scan_plugins)
+  local disable_count=0
+  local keep_count=0
+  local saved=0
+
+  if $JSON; then
+    local items=()
+    while IFS='|' read -r name has_skills tool_count action key; do
+      items+=("{\"service\":\"$name\",\"tools\":$tool_count,\"action\":\"$action\",\"has_skills\":$( [[ "$has_skills" == "yes" ]] && echo true || echo false ),\"plugin_key\":\"$key\"}")
+      [[ "$action" == "disable" ]] && saved=$((saved + tool_count * 300))
+    done <<< "$scan"
+    local joined
+    joined=$(printf ',%s' "${items[@]}")
+    joined="${joined:1}"
+    echo "{\"mode\":\"preview\",\"plugins\":[$joined],\"tokens_saved\":$saved}"
+    return
+  fi
+
+  echo "Scanning Claude Code plugins..."
+  echo ""
+
+  while IFS='|' read -r name has_skills tool_count action key; do
+    case "$action" in
+      disable)
+        printf "  %-12s enabled → disable  (%d tools → mcpfs-%s CLI)\n" "$name" "$tool_count" "$name"
+        disable_count=$((disable_count + 1))
+        saved=$((saved + tool_count * 300))
+        ;;
+      keep)
+        printf "  %-12s enabled → keep     (has skills)\n" "$name"
+        keep_count=$((keep_count + 1))
+        ;;
+      already_disabled)
+        printf "  %-12s disabled (already migrated)\n" "$name"
+        ;;
+      not_found)
+        printf "  %-12s not installed\n" "$name"
+        ;;
+    esac
+  done <<< "$scan"
+
+  echo ""
+  if [[ $disable_count -eq 0 ]]; then
+    echo "Nothing to migrate."
+    exit 3
+  fi
+  echo "Would disable $disable_count plugin(s), saving ~$((saved / 1000)),000 tokens/conversation."
+  echo "Run with --apply to execute."
+}
+
+# Apply mode
+apply() {
+  local scan
+  scan=$(scan_plugins)
+  local disable_count=0
+  local saved=0
+
+  # Check if there's anything to do
+  local has_work=false
+  while IFS='|' read -r name has_skills tool_count action key; do
+    [[ "$action" == "disable" ]] && has_work=true
+  done <<< "$scan"
+
+  if ! $has_work; then
+    if $JSON; then
+      echo '{"mode":"apply","status":"nothing_to_do"}'
+    else
+      echo "Nothing to migrate."
+    fi
+    exit 3
+  fi
+
+  # Backup
+  cp "$SETTINGS" "$BACKUP"
+
+  local tmp="$SETTINGS.tmp.$$"
+  cp "$SETTINGS" "$tmp"
+
+  while IFS='|' read -r name has_skills tool_count action key; do
+    if [[ "$action" == "disable" ]]; then
+      jq ".enabledPlugins[\"$key\"] = false" "$tmp" > "$tmp.new" && mv "$tmp.new" "$tmp"
+      disable_count=$((disable_count + 1))
+      saved=$((saved + tool_count * 300))
+      $JSON || echo "  ✓ Disabled $name plugin"
+    fi
+  done <<< "$scan"
+
+  mv "$tmp" "$SETTINGS"
+
+  # Inject CLAUDE.md section
+  if [[ -n "$CLAUDE_MD" ]] && [[ -f "$CLAUDE_MD" ]]; then
+    inject_claude_md
+    $JSON || echo "  ✓ Added mcpfs section to $CLAUDE_MD"
+  fi
+
+  if $JSON; then
+    echo "{\"mode\":\"apply\",\"status\":\"success\",\"disabled\":$disable_count,\"tokens_saved\":$saved,\"backup\":\"$BACKUP\"}"
+  else
+    echo ""
+    echo "Done. $disable_count plugin(s) disabled, ~$((saved / 1000)),000 tokens saved."
+    echo "Backup: $BACKUP"
+    echo "Undo:   mcpfs migrate --undo"
+  fi
+}
+
+# Undo mode
+undo() {
+  if [[ ! -f "$BACKUP" ]]; then
+    if $JSON; then
+      echo '{"mode":"undo","status":"no_backup"}'
+    else
+      die "no backup found at $BACKUP"
+    fi
+    exit 1
+  fi
+
+  cp "$BACKUP" "$SETTINGS"
+
+  # Remove CLAUDE.md section
+  if [[ -n "$CLAUDE_MD" ]] && [[ -f "$CLAUDE_MD" ]]; then
+    remove_claude_md
+    $JSON || echo "  ✓ Removed mcpfs section from $CLAUDE_MD"
+  fi
+
+  if $JSON; then
+    echo '{"mode":"undo","status":"success"}'
+  else
+    echo "  ✓ Restored settings.json from backup"
+    echo "Done. Migration undone."
+  fi
+}
+
+# Inject mcpfs section into CLAUDE.md
+inject_claude_md() {
+  local marker_begin="<!-- mcpfs:begin -->"
+  local marker_end="<!-- mcpfs:end -->"
+  local content
+  content=$(cat <<'MCPFS'
+<!-- mcpfs:begin -->
+## mcpfs (auto-configured)
+
+Reads: `cat /mnt/mcpfs/<service>/*.json | jq`
+Writes: `mcpfs-<service> <tool> --flags`
+
+Available: posthog (67 tools), github (43), stripe (28), vercel (12), linear (7).
+Prefer filesystem reads over MCP tool calls. Mount: `source mcpfs-env && mcpfs-mount`
+<!-- mcpfs:end -->
+MCPFS
+)
+
+  if grep -q "$marker_begin" "$CLAUDE_MD" 2>/dev/null; then
+    # Replace existing section
+    local tmp="$CLAUDE_MD.tmp.$$"
+    awk -v begin="$marker_begin" -v end="$marker_end" -v new="$content" '
+      $0 == begin { print new; skip=1; next }
+      $0 == end { skip=0; next }
+      !skip { print }
+    ' "$CLAUDE_MD" > "$tmp" && mv "$tmp" "$CLAUDE_MD"
+  else
+    # Append
+    echo "" >> "$CLAUDE_MD"
+    echo "$content" >> "$CLAUDE_MD"
+  fi
+}
+
+# Remove mcpfs section from CLAUDE.md
+remove_claude_md() {
+  local marker_begin="<!-- mcpfs:begin -->"
+  local marker_end="<!-- mcpfs:end -->"
+
+  if grep -q "$marker_begin" "$CLAUDE_MD" 2>/dev/null; then
+    local tmp="$CLAUDE_MD.tmp.$$"
+    awk -v begin="$marker_begin" -v end="$marker_end" '
+      $0 == begin { skip=1; next }
+      $0 == end { skip=0; next }
+      !skip { print }
+    ' "$CLAUDE_MD" > "$tmp" && mv "$tmp" "$CLAUDE_MD"
+  fi
+}
+
+# Dispatch
+case "$MODE" in
+  preview) preview ;;
+  apply)   apply ;;
+  undo)    undo ;;
+esac
