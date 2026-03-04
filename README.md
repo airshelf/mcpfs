@@ -42,10 +42,10 @@ cat /tmp/mnt/github/repos
 
 | Server | Auth | Resources | Install |
 |--------|------|-----------|---------|
-| **mcpfs-github** | `GITHUB_TOKEN` | repos, issues, PRs, readme, actions, releases, notifications, gists | `go install .../servers/github@latest` |
-| **mcpfs-vercel** | `VERCEL_TOKEN` | deployments, projects, env vars, domains, build/runtime logs | `go install .../servers/vercel@latest` |
-| **mcpfs-docker** | Docker socket | containers, images, networks, volumes, logs, inspect | `go install .../servers/docker@latest` |
-| **mcpfs-k8s** | `KUBECONFIG` | namespaces, pods, services, deployments, nodes, logs | `go install .../servers/k8s@latest` |
+| **mcpfs-github** | `GITHUB_TOKEN` | repos, issues, PRs, readme, actions, releases, notifications, gists + **4 CLI tools** | `go install .../servers/github@latest` |
+| **mcpfs-vercel** | `VERCEL_TOKEN` | deployments, projects, env vars, domains, build/runtime logs + **4 CLI tools** | `go install .../servers/vercel@latest` |
+| **mcpfs-docker** | Docker socket | containers, images, networks, volumes, logs, inspect + **3 CLI tools** | `go install .../servers/docker@latest` |
+| **mcpfs-k8s** | `KUBECONFIG` | namespaces, pods, services, deployments, nodes, logs + **3 CLI tools** | `go install .../servers/k8s@latest` |
 | **mcpfs-postgres** | `DATABASE_URL` | tables, schema, row counts, sample data, extensions, connections | `go install .../servers/postgres@latest` |
 | **mcpfs-npm** | (none) | package info, versions, dependencies, maintainers, search | `go install .../servers/npm@latest` |
 | **mcpfs-slack** | `SLACK_TOKEN` | channels, messages, threads, users, search | `go install .../servers/slack@latest` |
@@ -118,6 +118,10 @@ mcpfs-linear tools
 # Execute a write
 mcpfs-linear create_issue --teamId abc --title "Fix login bug"
 mcpfs-posthog create-feature-flag --key my-flag --name "My Flag"
+mcpfs-github create-issue --owner myorg --repo myapp --title "Bug report"
+mcpfs-docker restart --id my-container
+mcpfs-k8s scale --deployment api --replicas 3
+mcpfs-vercel set-env --project myapp --key API_URL --value https://api.example.com
 
 # Per-tool help
 mcpfs-linear create_issue --help
@@ -131,6 +135,10 @@ How it works: tool schemas are captured once from upstream MCP servers (`cmd/cap
 | **mcpfs-linear** | stdio (@mseep/linear-mcp) | 7 | Captured |
 | **mcpfs-stripe** | HTTP (mcp.stripe.com) | — | Wired, needs auth |
 | **mcpfs-notion** | HTTP (mcp.notion.com) | — | Wired, needs auth |
+| **mcpfs-github** | Direct REST API | 4 | Hand-written |
+| **mcpfs-vercel** | Direct REST API | 4 | Hand-written |
+| **mcpfs-docker** | Docker socket | 3 | Hand-written |
+| **mcpfs-k8s** | kubectl | 3 | Hand-written |
 
 ### Capture tools for a new server
 
@@ -203,7 +211,7 @@ pkg/mcpserve/       # MCP resource server framework (shared by all servers)
 pkg/mcpclient/      # MCP client (JSON-RPC over stdio)
 pkg/mcptool/        # Tool schema → CLI bridge (dispatch, HTTP/stdio callers)
 internal/fuse/      # FUSE filesystem implementation
-servers/            # 8 MCP resource servers (read via FUSE, write via CLI)
+servers/            # 11 MCP resource servers (read via FUSE, write via CLI)
   github/           # GitHub REST API
   vercel/           # Vercel REST API
   docker/           # Docker Engine API (unix socket)

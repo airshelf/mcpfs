@@ -26,6 +26,7 @@ import (
 	"strings"
 
 	"github.com/airshelf/mcpfs/pkg/mcpserve"
+	"github.com/airshelf/mcpfs/pkg/mcptool"
 )
 
 var client *http.Client
@@ -92,6 +93,62 @@ func dockerLogs(path string) (string, error) {
 		b.Write(frame)
 	}
 	return b.String(), nil
+}
+
+func dockerPost(path string) (json.RawMessage, error) {
+	resp, err := client.Post("http://localhost/v1.47"+path, "application/json", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("Docker API %d: %s", resp.StatusCode, string(body[:min(len(body), 200)]))
+	}
+	if len(body) == 0 {
+		return json.RawMessage(`{"status":"ok"}`), nil
+	}
+	return json.RawMessage(body), nil
+}
+
+var dockerTools = []mcptool.ToolDef{
+	{
+		Name:        "start",
+		Description: "Start a stopped container",
+		InputSchema: mcptool.BuildSchema([]mcptool.ParamDef{
+			{Name: "id", Type: "string", Desc: "Container ID or name", Required: true},
+		}),
+	},
+	{
+		Name:        "stop",
+		Description: "Stop a running container",
+		InputSchema: mcptool.BuildSchema([]mcptool.ParamDef{
+			{Name: "id", Type: "string", Desc: "Container ID or name", Required: true},
+		}),
+	},
+	{
+		Name:        "restart",
+		Description: "Restart a container",
+		InputSchema: mcptool.BuildSchema([]mcptool.ParamDef{
+			{Name: "id", Type: "string", Desc: "Container ID or name", Required: true},
+		}),
+	},
+}
+
+type dockerCaller struct{}
+
+func (c *dockerCaller) Call(toolName string, args map[string]interface{}) (json.RawMessage, error) {
+	id, _ := args["id"].(string)
+	switch toolName {
+	case "start":
+		return dockerPost(fmt.Sprintf("/containers/%s/start", id))
+	case "stop":
+		return dockerPost(fmt.Sprintf("/containers/%s/stop", id))
+	case "restart":
+		return dockerPost(fmt.Sprintf("/containers/%s/restart", id))
+	default:
+		return nil, fmt.Errorf("unknown tool: %s", toolName)
+	}
 }
 
 // slimObjects extracts only the named fields from an array of JSON objects.
@@ -214,6 +271,11 @@ func readContainerResource(uri string) (mcpserve.ReadResult, error) {
 }
 
 func main() {
+	// CLI tool dispatch mode: mcpfs-docker <tool-name> [--flags]
+	if len(os.Args) > 1 {
+		os.Exit(mcptool.Run("mcpfs-docker", dockerTools, &dockerCaller{}, os.Args[1:]))
+	}
+
 	srv := mcpserve.New("mcpfs-docker", "0.1.0", readResource)
 
 	srv.AddResource(mcpserve.Resource{

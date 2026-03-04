@@ -16,6 +16,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -26,6 +27,7 @@ import (
 	"strings"
 
 	"github.com/airshelf/mcpfs/pkg/mcpserve"
+	"github.com/airshelf/mcpfs/pkg/mcptool"
 )
 
 var token string
@@ -60,6 +62,117 @@ func ghAPI(path string) (json.RawMessage, error) {
 		return nil, fmt.Errorf("GitHub API %d: %s", resp.StatusCode, string(body[:min(len(body), 200)]))
 	}
 	return json.RawMessage(body), nil
+}
+
+func ghPost(path string, body interface{}) (json.RawMessage, error) {
+	data, _ := json.Marshal(body)
+	req, _ := http.NewRequest("POST", "https://api.github.com"+path, bytes.NewReader(data))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	out, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("GitHub API %d: %s", resp.StatusCode, string(out[:min(len(out), 200)]))
+	}
+	return json.RawMessage(out), nil
+}
+
+func ghPut(path string, body interface{}) (json.RawMessage, error) {
+	data, _ := json.Marshal(body)
+	req, _ := http.NewRequest("PUT", "https://api.github.com"+path, bytes.NewReader(data))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	out, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("GitHub API %d: %s", resp.StatusCode, string(out[:min(len(out), 200)]))
+	}
+	return json.RawMessage(out), nil
+}
+
+var ghTools = []mcptool.ToolDef{
+	{
+		Name:        "create-issue",
+		Description: "Create an issue in a repository",
+		InputSchema: mcptool.BuildSchema([]mcptool.ParamDef{
+			{Name: "owner", Type: "string", Desc: "Repository owner", Required: true},
+			{Name: "repo", Type: "string", Desc: "Repository name", Required: true},
+			{Name: "title", Type: "string", Desc: "Issue title", Required: true},
+			{Name: "body", Type: "string", Desc: "Issue body (markdown)"},
+			{Name: "labels", Type: "array", Desc: "Labels (comma-separated)"},
+			{Name: "assignees", Type: "array", Desc: "Assignees (comma-separated)"},
+		}),
+	},
+	{
+		Name:        "create-comment",
+		Description: "Add a comment to an issue or pull request",
+		InputSchema: mcptool.BuildSchema([]mcptool.ParamDef{
+			{Name: "owner", Type: "string", Desc: "Repository owner", Required: true},
+			{Name: "repo", Type: "string", Desc: "Repository name", Required: true},
+			{Name: "number", Type: "integer", Desc: "Issue or PR number", Required: true},
+			{Name: "body", Type: "string", Desc: "Comment body (markdown)", Required: true},
+		}),
+	},
+	{
+		Name:        "create-pr",
+		Description: "Create a pull request",
+		InputSchema: mcptool.BuildSchema([]mcptool.ParamDef{
+			{Name: "owner", Type: "string", Desc: "Repository owner", Required: true},
+			{Name: "repo", Type: "string", Desc: "Repository name", Required: true},
+			{Name: "title", Type: "string", Desc: "PR title", Required: true},
+			{Name: "body", Type: "string", Desc: "PR body (markdown)"},
+			{Name: "head", Type: "string", Desc: "Branch with changes", Required: true},
+			{Name: "base", Type: "string", Desc: "Branch to merge into", Required: true},
+		}),
+	},
+	{
+		Name:        "merge-pr",
+		Description: "Merge a pull request",
+		InputSchema: mcptool.BuildSchema([]mcptool.ParamDef{
+			{Name: "owner", Type: "string", Desc: "Repository owner", Required: true},
+			{Name: "repo", Type: "string", Desc: "Repository name", Required: true},
+			{Name: "number", Type: "integer", Desc: "PR number", Required: true},
+			{Name: "method", Type: "string", Desc: "Merge method: merge, squash, or rebase"},
+		}),
+	},
+}
+
+type ghCaller struct{}
+
+func (c *ghCaller) Call(toolName string, args map[string]interface{}) (json.RawMessage, error) {
+	s := func(key string) string { v, _ := args[key].(string); return v }
+	owner, repo := s("owner"), s("repo")
+
+	switch toolName {
+	case "create-issue":
+		return ghPost(fmt.Sprintf("/repos/%s/%s/issues", owner, repo), args)
+	case "create-comment":
+		n := int64(args["number"].(float64))
+		return ghPost(fmt.Sprintf("/repos/%s/%s/issues/%d/comments", owner, repo, n), map[string]interface{}{"body": args["body"]})
+	case "create-pr":
+		return ghPost(fmt.Sprintf("/repos/%s/%s/pulls", owner, repo), args)
+	case "merge-pr":
+		n := int64(args["number"].(float64))
+		body := map[string]interface{}{}
+		if m := s("method"); m != "" {
+			body["merge_method"] = m
+		}
+		return ghPut(fmt.Sprintf("/repos/%s/%s/pulls/%d/merge", owner, repo, n), body)
+	default:
+		return nil, fmt.Errorf("unknown tool: %s", toolName)
+	}
 }
 
 // slimObjects extracts only the named fields from an array of JSON objects.
@@ -242,6 +355,11 @@ func repoSuffix(uri, owner, repo string) string {
 }
 
 func main() {
+	// CLI tool dispatch mode: mcpfs-github <tool-name> [--flags]
+	if len(os.Args) > 1 {
+		os.Exit(mcptool.Run("mcpfs-github", ghTools, &ghCaller{}, os.Args[1:]))
+	}
+
 	srv := mcpserve.New("mcpfs-github", "0.1.0", readResource)
 
 	srv.AddResource(mcpserve.Resource{

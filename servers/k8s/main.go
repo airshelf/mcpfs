@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"github.com/airshelf/mcpfs/pkg/mcpserve"
+	"github.com/airshelf/mcpfs/pkg/mcptool"
 )
 
 func kubectl(args ...string) (json.RawMessage, error) {
@@ -86,6 +87,68 @@ func resolve(obj map[string]interface{}, path string) interface{} {
 		current = m[p]
 	}
 	return current
+}
+
+var k8sTools = []mcptool.ToolDef{
+	{
+		Name:        "scale",
+		Description: "Scale a deployment's replica count",
+		InputSchema: mcptool.BuildSchema([]mcptool.ParamDef{
+			{Name: "deployment", Type: "string", Desc: "Deployment name", Required: true},
+			{Name: "replicas", Type: "integer", Desc: "Number of replicas", Required: true},
+			{Name: "namespace", Type: "string", Desc: "Namespace (default: default)"},
+		}),
+	},
+	{
+		Name:        "restart",
+		Description: "Rolling restart a deployment",
+		InputSchema: mcptool.BuildSchema([]mcptool.ParamDef{
+			{Name: "deployment", Type: "string", Desc: "Deployment name", Required: true},
+			{Name: "namespace", Type: "string", Desc: "Namespace (default: default)"},
+		}),
+	},
+	{
+		Name:        "delete-pod",
+		Description: "Delete a pod (will be recreated by controller)",
+		InputSchema: mcptool.BuildSchema([]mcptool.ParamDef{
+			{Name: "pod", Type: "string", Desc: "Pod name", Required: true},
+			{Name: "namespace", Type: "string", Desc: "Namespace (default: default)"},
+		}),
+	},
+}
+
+type k8sCaller struct{}
+
+func (c *k8sCaller) Call(toolName string, args map[string]interface{}) (json.RawMessage, error) {
+	s := func(key string) string { v, _ := args[key].(string); return v }
+	ns := s("namespace")
+	if ns == "" {
+		ns = "default"
+	}
+
+	switch toolName {
+	case "scale":
+		replicas := fmt.Sprintf("%v", args["replicas"])
+		out, err := kubectlText("scale", fmt.Sprintf("deployment/%s", s("deployment")), "--replicas="+replicas, "-n", ns)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(map[string]string{"status": strings.TrimSpace(out)})
+	case "restart":
+		out, err := kubectlText("rollout", "restart", fmt.Sprintf("deployment/%s", s("deployment")), "-n", ns)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(map[string]string{"status": strings.TrimSpace(out)})
+	case "delete-pod":
+		out, err := kubectlText("delete", "pod", s("pod"), "-n", ns)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(map[string]string{"status": strings.TrimSpace(out)})
+	default:
+		return nil, fmt.Errorf("unknown tool: %s", toolName)
+	}
 }
 
 func readResource(uri string) (mcpserve.ReadResult, error) {
@@ -248,6 +311,11 @@ func main() {
 	if _, err := exec.LookPath("kubectl"); err != nil {
 		fmt.Fprintln(os.Stderr, "mcpfs-k8s: kubectl not found in PATH")
 		os.Exit(1)
+	}
+
+	// CLI tool dispatch mode: mcpfs-k8s <tool-name> [--flags]
+	if len(os.Args) > 1 {
+		os.Exit(mcptool.Run("mcpfs-k8s", k8sTools, &k8sCaller{}, os.Args[1:]))
 	}
 
 	srv := mcpserve.New("mcpfs-k8s", "0.1.0", readResource)

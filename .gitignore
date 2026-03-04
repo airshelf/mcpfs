@@ -20,3 +20,6 @@
 # Ralph state
 ralph-state.md
 .ralph-done
+
+# Env (API keys)
+.env

@@ -71,6 +71,32 @@ func IsDataWrapped(schema json.RawMessage) bool {
 	return false
 }
 
+// BuildSchema constructs a JSON Schema from parameter definitions.
+// Used by servers that define tools in Go code (no tools.json).
+func BuildSchema(params []ParamDef) json.RawMessage {
+	props := make(map[string]interface{})
+	var required []string
+	for _, p := range params {
+		prop := map[string]string{"type": p.Type}
+		if p.Desc != "" {
+			prop["description"] = p.Desc
+		}
+		props[p.Name] = prop
+		if p.Required {
+			required = append(required, p.Name)
+		}
+	}
+	schema := map[string]interface{}{
+		"type":       "object",
+		"properties": props,
+	}
+	if len(required) > 0 {
+		schema["required"] = required
+	}
+	data, _ := json.Marshal(schema)
+	return data
+}
+
 func extractParams(s schemaObj) []ParamDef {
 	reqSet := make(map[string]bool, len(s.Required))
 	for _, r := range s.Required {
