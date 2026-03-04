@@ -20,6 +20,7 @@
 package main
 
 import (
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -28,7 +29,11 @@ import (
 	"strings"
 
 	"github.com/airshelf/mcpfs/pkg/mcpserve"
+	"github.com/airshelf/mcpfs/pkg/mcptool"
 )
+
+//go:embed tools.json
+var toolSchemas []byte
 
 var (
 	apiKey    string
@@ -52,6 +57,13 @@ func phGet(path string) (json.RawMessage, error) {
 		return nil, fmt.Errorf("posthog %d: %s", resp.StatusCode, truncate(string(body), 200))
 	}
 	return body, nil
+}
+
+func mcpURL() string {
+	if u := os.Getenv("POSTHOG_MCP_URL"); u != "" {
+		return u
+	}
+	return "https://mcp.posthog.com/mcp"
 }
 
 func truncate(s string, n int) string {
@@ -170,6 +182,18 @@ func main() {
 		fmt.Fprintln(os.Stderr, "mcpfs-posthog: POSTHOG_API_KEY env var required")
 		os.Exit(1)
 	}
+
+	// CLI tool dispatch mode: mcpfs-posthog <tool-name> [--flags]
+	if len(os.Args) > 1 {
+		var tools []mcptool.ToolDef
+		json.Unmarshal(toolSchemas, &tools)
+		caller := &mcptool.HTTPCaller{
+			URL:        mcpURL(),
+			AuthHeader: "Bearer " + apiKey,
+		}
+		os.Exit(mcptool.Run("mcpfs-posthog", tools, caller, os.Args[1:]))
+	}
+
 	projectID = os.Getenv("POSTHOG_PROJECT_ID")
 	if projectID == "" {
 		fmt.Fprintln(os.Stderr, "mcpfs-posthog: POSTHOG_PROJECT_ID env var required")

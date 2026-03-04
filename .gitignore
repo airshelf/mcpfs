@@ -1,7 +1,13 @@
 # Binaries (root only)
 /mcpfs
 /mcpfs-*
-/servers/*/main
+/bin/
+
+# Server binaries in each server dir
+/servers/*/[a-z]*
+!/servers/*/main.go
+!/servers/*/*.go
+!/servers/*/tools.json
 
 # IDE
 .idea/
@@ -10,3 +16,7 @@
 
 # OS
 .DS_Store
+
+# Ralph state
+ralph-state.md
+.ralph-done

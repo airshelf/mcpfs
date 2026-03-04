@@ -172,7 +172,7 @@ func readIssueComments(id string) (mcpserve.ReadResult, error) {
 
 func readProjects() (mcpserve.ReadResult, error) {
 	data, err := linearQuery(`{
-		projects(first: 50, filter: { state: { type: { in: ["started", "planned"] } } }) {
+		projects(first: 50, filter: { state: { in: ["started", "planned"] } }) {
 			nodes {
 				id name state
 				progress

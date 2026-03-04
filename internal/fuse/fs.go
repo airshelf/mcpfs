@@ -310,6 +310,7 @@ var _ = (gofuse.NodeReader)((*fileNode)(nil))
 func (f *fileNode) Getattr(ctx context.Context, fh gofuse.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	data, err := f.readData()
 	if err != nil {
+		log.Printf("mcpfs: getattr %s: %v", f.uri, err)
 		out.Size = 0
 	} else {
 		out.Size = uint64(len(data))
