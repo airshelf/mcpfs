@@ -38,7 +38,7 @@ cat /tmp/mnt/github/repos
 
 ## Available servers
 
-8 servers, each 250–380 lines of Go.
+11 servers, each 250–380 lines of Go. Servers with captured tool schemas also support CLI writes.
 
 | Server | Auth | Resources | Install |
 |--------|------|-----------|---------|
@@ -49,7 +49,10 @@ cat /tmp/mnt/github/repos
 | **mcpfs-postgres** | `DATABASE_URL` | tables, schema, row counts, sample data, extensions, connections | `go install .../servers/postgres@latest` |
 | **mcpfs-npm** | (none) | package info, versions, dependencies, maintainers, search | `go install .../servers/npm@latest` |
 | **mcpfs-slack** | `SLACK_TOKEN` | channels, messages, threads, users, search | `go install .../servers/slack@latest` |
-| **mcpfs-linear** | `LINEAR_API_KEY` | issues, projects, cycles, teams, labels, members | `go install .../servers/linear@latest` |
+| **mcpfs-linear** | `LINEAR_API_KEY` | issues, projects, cycles, teams + **7 CLI tools** | `go install .../servers/linear@latest` |
+| **mcpfs-posthog** | `POSTHOG_API_KEY` | dashboards, insights, events, feature flags + **67 CLI tools** | `go install .../servers/posthog@latest` |
+| **mcpfs-stripe** | `STRIPE_API_KEY` | balance, charges, customers, products, subscriptions | `go install .../servers/stripe@latest` |
+| **mcpfs-notion** | `NOTION_API_KEY` | databases, pages, search | `go install .../servers/notion@latest` |
 
 ### Filesystem tree (GitHub example)
 
@@ -102,6 +105,44 @@ See [examples/](examples/) for complete scripts.
 | Cross-service search | `grep -r` | N scripts | N clients |
 
 See [bench/](bench/) for runnable benchmarks.
+
+## CLI writes (tool proxy)
+
+Reads via filesystem, writes via CLI. Each server binary doubles as a tool proxy — MCP tool schemas are embedded and exposed as CLI flags.
+
+```bash
+# List available write operations (~50 tokens vs 20,000 for raw MCP schemas)
+mcpfs-posthog tools
+mcpfs-linear tools
+
+# Execute a write
+mcpfs-linear create_issue --teamId abc --title "Fix login bug"
+mcpfs-posthog create-feature-flag --key my-flag --name "My Flag"
+
+# Per-tool help
+mcpfs-linear create_issue --help
+```
+
+How it works: tool schemas are captured once from upstream MCP servers (`cmd/capture-tools`), embedded via `//go:embed`, and exposed as CLI flags. Calls are proxied to the original MCP server (HTTP or stdio).
+
+| Server | Transport | Tools | Status |
+|--------|-----------|-------|--------|
+| **mcpfs-posthog** | HTTP (mcp.posthog.com) | 67 | Captured |
+| **mcpfs-linear** | stdio (@mseep/linear-mcp) | 7 | Captured |
+| **mcpfs-stripe** | HTTP (mcp.stripe.com) | — | Wired, needs auth |
+| **mcpfs-notion** | HTTP (mcp.notion.com) | — | Wired, needs auth |
+
+### Capture tools for a new server
+
+```bash
+# HTTP MCP server
+go run ./cmd/capture-tools -url https://mcp.posthog.com/mcp \
+  -auth "Bearer $POSTHOG_API_KEY" -out servers/posthog/tools.json
+
+# Stdio MCP server
+go run ./cmd/capture-tools -cmd npx -args "@mseep/linear-mcp" \
+  -out servers/linear/tools.json
+```
 
 ## Write your own server
 
@@ -157,10 +198,12 @@ Mount it: `mcpfs /tmp/mnt/myservice -- my-server`
 
 ```
 cmd/mcpfs/          # FUSE mount CLI
+cmd/capture-tools/  # Capture MCP tool schemas (HTTP + stdio)
 pkg/mcpserve/       # MCP resource server framework (shared by all servers)
 pkg/mcpclient/      # MCP client (JSON-RPC over stdio)
+pkg/mcptool/        # Tool schema → CLI bridge (dispatch, HTTP/stdio callers)
 internal/fuse/      # FUSE filesystem implementation
-servers/            # 8 MCP resource servers
+servers/            # 8 MCP resource servers (read via FUSE, write via CLI)
   github/           # GitHub REST API
   vercel/           # Vercel REST API
   docker/           # Docker Engine API (unix socket)
@@ -169,6 +212,9 @@ servers/            # 8 MCP resource servers
   npm/              # NPM registry API
   slack/            # Slack Web API
   linear/           # Linear GraphQL API
+  posthog/          # PostHog HTTP MCP proxy
+  stripe/           # Stripe HTTP MCP proxy
+  notion/           # Notion HTTP MCP proxy
 examples/           # Cross-service shell scripts
 bench/              # Benchmarks (tokens, latency, composability)
 ```

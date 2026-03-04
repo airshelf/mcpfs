@@ -309,7 +309,7 @@ func main() {
 		json.Unmarshal(toolSchemas, &tools)
 		caller := &mcptool.StdioCaller{
 			Command: "npx",
-			Args:    []string{"@modelcontextprotocol/server-linear"},
+			Args:    []string{"@mseep/linear-mcp"},
 		}
 		defer caller.Close()
 		os.Exit(mcptool.Run("mcpfs-linear", tools, caller, os.Args[1:]))

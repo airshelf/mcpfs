@@ -1,1 +1,168 @@
-[]
+[
+  {
+    "description": "Create a new issue in Linear",
+    "inputSchema": {
+      "properties": {
+        "assigneeId": {
+          "description": "Assignee user ID (optional)",
+          "type": "string"
+        },
+        "description": {
+          "description": "Issue description (markdown supported)",
+          "type": "string"
+        },
+        "labels": {
+          "description": "Label IDs to apply (optional)",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "priority": {
+          "description": "Priority (0-4, optional)",
+          "maximum": 4,
+          "minimum": 0,
+          "type": "number"
+        },
+        "teamId": {
+          "description": "Team ID",
+          "type": "string"
+        },
+        "title": {
+          "description": "Issue title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "teamId"
+      ],
+      "type": "object"
+    },
+    "name": "create_issue"
+  },
+  {
+    "description": "List issues with optional filters",
+    "inputSchema": {
+      "properties": {
+        "assigneeId": {
+          "description": "Filter by assignee ID (optional)",
+          "type": "string"
+        },
+        "first": {
+          "description": "Number of issues to return (default: 50)",
+          "type": "number"
+        },
+        "status": {
+          "description": "Filter by status (optional)",
+          "type": "string"
+        },
+        "teamId": {
+          "description": "Filter by team ID (optional)",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "list_issues"
+  },
+  {
+    "description": "Update an existing issue",
+    "inputSchema": {
+      "properties": {
+        "assigneeId": {
+          "description": "New assignee ID (optional)",
+          "type": "string"
+        },
+        "description": {
+          "description": "New description (optional)",
+          "type": "string"
+        },
+        "issueId": {
+          "description": "Issue ID",
+          "type": "string"
+        },
+        "priority": {
+          "description": "New priority (0-4, optional)",
+          "maximum": 4,
+          "minimum": 0,
+          "type": "number"
+        },
+        "status": {
+          "description": "New status (optional)",
+          "type": "string"
+        },
+        "title": {
+          "description": "New title (optional)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "issueId"
+      ],
+      "type": "object"
+    },
+    "name": "update_issue"
+  },
+  {
+    "description": "List all teams in the workspace",
+    "inputSchema": {
+      "properties": {},
+      "type": "object"
+    },
+    "name": "list_teams"
+  },
+  {
+    "description": "List all projects",
+    "inputSchema": {
+      "properties": {
+        "first": {
+          "description": "Number of projects to return (default: 50)",
+          "type": "number"
+        },
+        "teamId": {
+          "description": "Filter by team ID (optional)",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "list_projects"
+  },
+  {
+    "description": "Search for issues using a text query",
+    "inputSchema": {
+      "properties": {
+        "first": {
+          "description": "Number of results to return (default: 50)",
+          "type": "number"
+        },
+        "query": {
+          "description": "Search query text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "type": "object"
+    },
+    "name": "search_issues"
+  },
+  {
+    "description": "Get detailed information about a specific issue",
+    "inputSchema": {
+      "properties": {
+        "issueId": {
+          "description": "Issue ID",
+          "type": "string"
+        }
+      },
+      "required": [
+        "issueId"
+      ],
+      "type": "object"
+    },
+    "name": "get_issue"
+  }
+]
