@@ -1,5 +1,6 @@
 # Binaries (root only)
 /mcpfs
+/mcpfs-*
 /servers/*/main
 
 # IDE
