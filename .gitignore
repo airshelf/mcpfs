@@ -17,6 +17,9 @@
 ralph-state.md
 .ralph-done
 
+# Mounts
+.mcpfs/
+
 # Env (API keys)
 .env
 github

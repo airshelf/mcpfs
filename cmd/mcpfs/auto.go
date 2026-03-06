@@ -406,11 +406,22 @@ func findEnvToken(name string) string {
 
 func runAuto(args []string) {
 	jsonOutput := false
-	for _, a := range args {
-		if a == "--json" {
+	mountRoot := ".mcpfs"
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--json":
 			jsonOutput = true
+		case "--mount":
+			if i+1 < len(args) {
+				mountRoot = args[i+1]
+				i++
+			}
 		}
 	}
+
+	// Load project-local env files (local credentials override global)
+	loadEnvFile(".env.local")
+	loadEnvFile(".env")
 
 	servers, err := discoverClaudePlugins()
 	if err != nil {
@@ -457,6 +468,6 @@ func runAuto(args []string) {
 	enc.Encode(servers)
 	tmpFile.Close()
 
-	fmt.Fprintln(os.Stderr, "mcpfs auto: mounting...")
-	runConfig(tmpFile.Name())
+	fmt.Fprintf(os.Stderr, "mcpfs auto: mounting to %s/\n", mountRoot)
+	runConfig(tmpFile.Name(), mountRoot)
 }

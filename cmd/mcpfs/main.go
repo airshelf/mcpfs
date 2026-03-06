@@ -24,8 +24,8 @@ func usage() {
 Usage:
   mcpfs <mountpoint> -- <command> [args...]    mount stdio server
   mcpfs <mountpoint> --http <url> [--auth H]   mount HTTP server
-  mcpfs --config <servers.json>                mount all from config
-  mcpfs auto [--json]                           discover and mount Claude Code plugins
+  mcpfs --config <servers.json> [--mount dir]   mount all from config
+  mcpfs auto [--mount dir] [--json]             discover and mount Claude Code plugins
   mcpfs tool <server> [tool] [--flags]          call a tool via CLI
   mcpfs -u <mountpoint>                        unmount
   mcpfs migrate [--apply|--undo|--json]
@@ -44,13 +44,21 @@ func main() {
 		usage()
 	}
 
-	// mcpfs --config servers.json
+	// mcpfs --config servers.json [--mount dir]
 	if args[0] == "--config" {
 		if len(args) < 2 {
 			fmt.Fprintln(os.Stderr, "mcpfs: --config requires a path")
 			os.Exit(1)
 		}
-		runConfig(args[1])
+		configPath := args[1]
+		mountRoot := ".mcpfs"
+		for i := 2; i < len(args); i++ {
+			if args[i] == "--mount" && i+1 < len(args) {
+				mountRoot = args[i+1]
+				i++
+			}
+		}
+		runConfig(configPath, mountRoot)
 		return
 	}
 
@@ -353,14 +361,13 @@ func loadEnvFile(path string) {
 	}
 }
 
-func runConfig(configPath string) {
+func runConfig(configPath, mountRoot string) {
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "mcpfs: config: %v\n", err)
 		os.Exit(1)
 	}
 
-	mountRoot := "/mnt/mcpfs"
 	var wg sync.WaitGroup
 
 	for name, srv := range cfg {
