@@ -20,10 +20,13 @@ func discoverClaudePlugins() (map[string]*serverEntry, error) {
 
 	claudeDir := filepath.Join(home, ".claude")
 
+	// Read global MCP servers from ~/.claude.json
+	globalServers, _ := readGlobalMCPServers(filepath.Join(home, ".claude.json"))
+
 	// Read installed plugins
 	installed, err := readInstalledPlugins(filepath.Join(claudeDir, "plugins", "installed_plugins.json"))
 	if err != nil {
-		return nil, fmt.Errorf("read installed plugins: %w", err)
+		installed = make(map[string][]installedPlugin) // non-fatal
 	}
 
 	// Read OAuth credentials
@@ -64,6 +67,50 @@ func discoverClaudePlugins() (map[string]*serverEntry, error) {
 				}
 				servers[name] = srv
 			}
+		}
+	}
+
+	// Add global MCP servers from ~/.claude.json (user-configured, highest priority)
+	for name, srv := range globalServers {
+		if shouldSkip(name, "") {
+			continue
+		}
+		entry := &serverEntry{}
+		if srv.Type == "http" || (srv.URL != "" && srv.Command == "") {
+			entry.Type = "http"
+			entry.URL = srv.URL
+			if len(srv.Headers) > 0 {
+				entry.Headers = srv.Headers
+			}
+		} else if srv.Command != "" {
+			entry.Command = srv.Command
+			entry.Args = srv.Args
+			if len(srv.Env) > 0 {
+				entry.Env = srv.Env
+			}
+		} else {
+			continue
+		}
+		servers[name] = entry
+	}
+
+	// Also scan enabled plugins from settings that may not be in installed_plugins
+	enabledPlugins, _ := readEnabledPlugins(filepath.Join(claudeDir, "settings.json"))
+	cacheDir := filepath.Join(claudeDir, "plugins", "cache")
+	for pluginKey := range enabledPlugins {
+		if _, exists := installed[pluginKey]; exists {
+			continue // already in installed list
+		}
+		// Extract plugin name and marketplace from "name@marketplace"
+		parts := strings.SplitN(pluginKey, "@", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		name, marketplace := parts[0], parts[1]
+		// Look for cached .mcp.json
+		matches, _ := filepath.Glob(filepath.Join(cacheDir, marketplace, name, "*", ".mcp.json"))
+		if len(matches) > 0 {
+			installed[pluginKey] = []installedPlugin{{InstallPath: filepath.Dir(matches[0])}}
 		}
 	}
 
@@ -156,6 +203,41 @@ type serverEntry struct {
 
 type installedPlugin struct {
 	InstallPath string `json:"installPath"`
+}
+
+func readEnabledPlugins(path string) (map[string]bool, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var file struct {
+		EnabledPlugins map[string]bool `json:"enabledPlugins"`
+	}
+	if err := json.Unmarshal(data, &file); err != nil {
+		return nil, err
+	}
+	// Only return enabled ones
+	result := make(map[string]bool)
+	for k, v := range file.EnabledPlugins {
+		if v {
+			result[k] = true
+		}
+	}
+	return result, nil
+}
+
+func readGlobalMCPServers(path string) (map[string]mcpServerDef, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var file struct {
+		MCPServers map[string]mcpServerDef `json:"mcpServers"`
+	}
+	if err := json.Unmarshal(data, &file); err != nil {
+		return nil, err
+	}
+	return file.MCPServers, nil
 }
 
 func readInstalledPlugins(path string) (map[string][]installedPlugin, error) {
