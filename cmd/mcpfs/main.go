@@ -25,6 +25,7 @@ Usage:
   mcpfs <mountpoint> -- <command> [args...]    mount stdio server
   mcpfs <mountpoint> --http <url> [--auth H]   mount HTTP server
   mcpfs --config <servers.json>                mount all from config
+  mcpfs auto [--json]                           discover and mount Claude Code plugins
   mcpfs tool <server> [tool] [--flags]          call a tool via CLI
   mcpfs -u <mountpoint>                        unmount
   mcpfs migrate [--apply|--undo|--json]
@@ -50,6 +51,12 @@ func main() {
 			os.Exit(1)
 		}
 		runConfig(args[1])
+		return
+	}
+
+	// mcpfs auto [--json]
+	if args[0] == "auto" {
+		runAuto(args[1:])
 		return
 	}
 
