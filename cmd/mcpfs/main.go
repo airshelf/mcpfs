@@ -1,17 +1,21 @@
 package main
 
 import (
+	"bufio"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 
 	"github.com/airshelf/mcpfs/internal/config"
 	mcpfuse "github.com/airshelf/mcpfs/internal/fuse"
 	"github.com/airshelf/mcpfs/pkg/mcpclient"
+	"github.com/airshelf/mcpfs/pkg/mcptool"
 )
 
 func usage() {
@@ -21,6 +25,7 @@ Usage:
   mcpfs <mountpoint> -- <command> [args...]    mount stdio server
   mcpfs <mountpoint> --http <url> [--auth H]   mount HTTP server
   mcpfs --config <servers.json>                mount all from config
+  mcpfs tool <server> [tool] [--flags]          call a tool via CLI
   mcpfs -u <mountpoint>                        unmount
   mcpfs migrate [--apply|--undo|--json]
 
@@ -45,6 +50,12 @@ func main() {
 			os.Exit(1)
 		}
 		runConfig(args[1])
+		return
+	}
+
+	// mcpfs tool <server> [tool-name] [--flags]
+	if args[0] == "tool" {
+		runTool(args[1:])
 		return
 	}
 
@@ -213,6 +224,125 @@ func main() {
 	if err := mcpfuse.Mount(mountpoint, client, debug); err != nil {
 		fmt.Fprintf(os.Stderr, "mcpfs: %v\n", err)
 		os.Exit(1)
+	}
+}
+
+func runTool(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "mcpfs tool: usage: mcpfs tool <server> [tool-name] [--flags]")
+		os.Exit(1)
+	}
+
+	// Parse --config flag (can appear anywhere)
+	configPath := filepath.Join(os.Getenv("HOME"), ".config", "mcpfs", "servers.json")
+	serverName := ""
+	var toolArgs []string
+
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--config" && i+1 < len(args) {
+			configPath = args[i+1]
+			i++
+		} else if serverName == "" {
+			serverName = args[i]
+		} else {
+			toolArgs = append(toolArgs, args[i:]...)
+			break
+		}
+	}
+
+	if serverName == "" {
+		fmt.Fprintln(os.Stderr, "mcpfs tool: missing server name")
+		os.Exit(1)
+	}
+
+	// Load env vars from ~/.config/mcpfs/env if it exists.
+	envPath := filepath.Join(filepath.Dir(configPath), "env")
+	loadEnvFile(envPath)
+
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "mcpfs tool: config: %v\n", err)
+		fmt.Fprintf(os.Stderr, "hint: create %s with server definitions\n", configPath)
+		os.Exit(1)
+	}
+
+	srv, ok := cfg[serverName]
+	if !ok {
+		fmt.Fprintf(os.Stderr, "mcpfs tool: unknown server %q\n", serverName)
+		fmt.Fprintf(os.Stderr, "available:")
+		for name := range cfg {
+			fmt.Fprintf(os.Stderr, " %s", name)
+		}
+		fmt.Fprintln(os.Stderr)
+		os.Exit(1)
+	}
+
+	// Connect to server
+	var caller toolCallerAdapter
+	if srv.Type == "http" {
+		client, err := mcpclient.NewHTTP(srv.URL, srv.Headers)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "mcpfs tool: %s: %v\n", serverName, err)
+			os.Exit(1)
+		}
+		caller.callTool = client.CallTool
+		caller.listTools = client.ListTools
+	} else {
+		for k, v := range srv.Env {
+			os.Setenv(k, v)
+		}
+		client, err := mcpclient.New(srv.Command, srv.Args)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "mcpfs tool: %s: %v\n", serverName, err)
+			os.Exit(1)
+		}
+		defer client.Close()
+		caller.callTool = client.CallTool
+		caller.listTools = client.ListTools
+	}
+
+	// List tools
+	toolsRaw, err := caller.listTools()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "mcpfs tool: %s: list tools: %v\n", serverName, err)
+		os.Exit(1)
+	}
+
+	var tools []mcptool.ToolDef
+	if err := json.Unmarshal(toolsRaw, &tools); err != nil {
+		fmt.Fprintf(os.Stderr, "mcpfs tool: %s: parse tools: %v\n", serverName, err)
+		os.Exit(1)
+	}
+
+	os.Exit(mcptool.Run(serverName, tools, &caller, toolArgs))
+}
+
+// toolCallerAdapter bridges mcpclient's CallTool to mcptool's Call interface.
+type toolCallerAdapter struct {
+	callTool  func(name string, args map[string]interface{}) (json.RawMessage, error)
+	listTools func() (json.RawMessage, error)
+}
+
+func (a *toolCallerAdapter) Call(toolName string, args map[string]interface{}) (json.RawMessage, error) {
+	return a.callTool(toolName, args)
+}
+
+// loadEnvFile reads KEY=VALUE lines from a file and sets them as env vars.
+func loadEnvFile(path string) {
+	f, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if k, v, ok := strings.Cut(line, "="); ok {
+			os.Setenv(k, v)
+		}
 	}
 }
 
