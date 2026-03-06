@@ -8,38 +8,16 @@ import (
 	"os"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/airshelf/mcpfs/pkg/mcpclient"
 	gofuse "github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 )
 
-// TTLs for different resource types.
-var (
-	ttlList    = 30 * time.Second
-	ttlSingle  = 60 * time.Second
-	ttlLogs    = 5 * time.Second
-)
-
-func ttlFor(path string) time.Duration {
-	switch {
-	case strings.HasSuffix(path, "/logs/build"):
-		return 5 * time.Minute
-	case strings.HasSuffix(path, "/logs/runtime"):
-		return ttlLogs
-	case strings.HasSuffix(path, ".json"):
-		return ttlList
-	default:
-		return ttlSingle
-	}
-}
-
 // mcpFS is the root FUSE inode.
 type mcpFS struct {
 	gofuse.Inode
 	client *mcpclient.Client
-	cache  *Cache
 	scheme string
 	tree   *fsTree
 }
@@ -340,18 +318,11 @@ func (f *fileNode) Read(ctx context.Context, fh gofuse.FileHandle, dest []byte, 
 }
 
 func (f *fileNode) readData() ([]byte, error) {
-	if data, ok := f.fsys.cache.Get(f.uri); ok {
-		return data, nil
-	}
-
 	text, _, err := f.fsys.client.ReadResource(f.uri)
 	if err != nil {
 		return nil, err
 	}
-
-	data := []byte(text)
-	f.fsys.cache.Set(f.uri, data, ttlFor(f.uri))
-	return data, nil
+	return []byte(text), nil
 }
 
 func resolveURI(uri string, params map[string]string) string {
@@ -370,7 +341,7 @@ func copyParams(m map[string]string) map[string]string {
 }
 
 // Mount creates the FUSE mount and blocks until unmounted.
-func Mount(mountpoint string, client *mcpclient.Client, cache *Cache, debug bool) error {
+func Mount(mountpoint string, client *mcpclient.Client, debug bool) error {
 	resources, err := client.ListResources()
 	if err != nil {
 		return fmt.Errorf("resources/list: %w", err)
@@ -400,7 +371,6 @@ func Mount(mountpoint string, client *mcpclient.Client, cache *Cache, debug bool
 	root := &dirNode{
 		fsys: &mcpFS{
 			client: client,
-			cache:  cache,
 			scheme: scheme,
 			tree:   tree,
 		},

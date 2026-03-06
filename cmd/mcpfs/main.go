@@ -137,8 +137,7 @@ func main() {
 		os.Exit(0)
 	}()
 
-	cache := mcpfuse.NewCache()
-	if err := mcpfuse.Mount(mountpoint, client, cache, debug); err != nil {
+	if err := mcpfuse.Mount(mountpoint, client, debug); err != nil {
 		fmt.Fprintf(os.Stderr, "mcpfs: %v\n", err)
 		os.Exit(1)
 	}
