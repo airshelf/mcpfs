@@ -16,10 +16,19 @@ import (
 	"github.com/hanwen/go-fuse/v2/fuse"
 )
 
+// MCPClient abstracts stdio and HTTP MCP clients.
+type MCPClient interface {
+	ListResources() ([]mcpclient.Resource, error)
+	ListResourceTemplates() ([]mcpclient.ResourceTemplate, error)
+	ListTools() (json.RawMessage, error)
+	CallTool(name string, args map[string]interface{}) (json.RawMessage, error)
+	ReadResource(uri string) (string, string, error)
+}
+
 // mcpFS is the root FUSE inode.
 type mcpFS struct {
 	gofuse.Inode
-	client     *mcpclient.Client
+	client     MCPClient
 	toolCaller ToolCaller
 	scheme     string
 	tree       *fsTree
@@ -399,7 +408,7 @@ func copyParams(m map[string]string) map[string]string {
 }
 
 // Mount creates the FUSE mount and blocks until unmounted.
-func Mount(mountpoint string, client *mcpclient.Client, debug bool) error {
+func Mount(mountpoint string, client MCPClient, debug bool) error {
 	resources, err := client.ListResources()
 	if err != nil {
 		resources = nil
