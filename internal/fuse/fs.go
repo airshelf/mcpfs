@@ -3,12 +3,14 @@ package fuse
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"strings"
 	"syscall"
 
+	"github.com/airshelf/mcpfs/internal/toolfs"
 	"github.com/airshelf/mcpfs/pkg/mcpclient"
 	gofuse "github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
@@ -34,6 +36,9 @@ type fsTree struct {
 	nestedParam    string
 	nestedChildren map[string]*fsTree
 	nestedLeaf     *fsTree
+	// Tool-backed fields (gateway)
+	toolName   string   // MCP tool name for tools/call
+	toolParams []string // required params for get-by-id
 }
 
 func newFSTree() *fsTree {
@@ -256,8 +261,19 @@ func (d *dirNode) buildInode(ctx context.Context, name string, t *fsTree, out *f
 		return d.NewInode(ctx, dn, gofuse.StableAttr{Mode: syscall.S_IFDIR}), 0
 	}
 
-	uri := resolveURI(t.uri, d.paramValues)
+	// Tool-backed file
+	if t.toolName != "" && d.fsys.toolCaller != nil {
+		args := make(map[string]interface{})
+		for k, v := range d.paramValues {
+			args[k] = v
+		}
+		out.Mode = syscall.S_IFREG | 0444
+		fn := &toolFileNode{fsys: d.fsys, toolName: t.toolName, args: args}
+		return d.NewInode(ctx, fn, gofuse.StableAttr{Mode: syscall.S_IFREG}), 0
+	}
 
+	// Resource-backed file
+	uri := resolveURI(t.uri, d.paramValues)
 	out.Mode = syscall.S_IFREG | 0444
 	fn := &fileNode{fsys: d.fsys, uri: uri}
 	return d.NewInode(ctx, fn, gofuse.StableAttr{Mode: syscall.S_IFREG}), 0
@@ -266,6 +282,21 @@ func (d *dirNode) buildInode(ctx context.Context, name string, t *fsTree, out *f
 func (d *dirNode) lookupTemplateChild(ctx context.Context, name string, out *fuse.EntryOut) (*gofuse.Inode, syscall.Errno) {
 	params := copyParams(d.paramValues)
 	params[d.tree.param] = name
+
+	// Tool-backed template: param value → file with tools/call
+	if d.tree.toolName != "" && d.fsys.toolCaller != nil && len(d.tree.children) == 0 {
+		args := make(map[string]interface{})
+		for k, v := range params {
+			args[k] = v
+		}
+		out.Mode = syscall.S_IFREG | 0444
+		fn := &toolFileNode{
+			fsys:     d.fsys,
+			toolName: d.tree.toolName,
+			args:     args,
+		}
+		return d.NewInode(ctx, fn, gofuse.StableAttr{Mode: syscall.S_IFREG}), 0
+	}
 
 	childTree := newFSTree()
 	childTree.isDir = true
@@ -371,15 +402,40 @@ func copyParams(m map[string]string) map[string]string {
 func Mount(mountpoint string, client *mcpclient.Client, debug bool) error {
 	resources, err := client.ListResources()
 	if err != nil {
-		return fmt.Errorf("resources/list: %w", err)
+		resources = nil
 	}
 	templates, err := client.ListResourceTemplates()
 	if err != nil {
-		return fmt.Errorf("resources/templates/list: %w", err)
+		templates = nil
 	}
 
-	if len(resources) == 0 && len(templates) == 0 {
-		return fmt.Errorf("server has no resources")
+	// Discover tools
+	var toolEntries []toolfs.ToolEntry
+	toolsRaw, err := client.ListTools()
+	if err == nil && toolsRaw != nil {
+		var tools []struct {
+			Name        string          `json:"name"`
+			InputSchema json.RawMessage `json:"inputSchema"`
+		}
+		if json.Unmarshal(toolsRaw, &tools) == nil {
+			for _, t := range tools {
+				class := toolfs.ClassifyTool(t.Name, t.InputSchema)
+				if class == toolfs.ToolWrite || class == toolfs.ToolQuery {
+					continue
+				}
+				toolEntries = append(toolEntries, toolfs.ToolEntry{
+					Name:           t.Name,
+					Class:          class,
+					Filename:       toolfs.ToolToFilename(t.Name, class),
+					ToolName:       t.Name,
+					RequiredParams: toolfs.RequiredParams(t.InputSchema),
+				})
+			}
+		}
+	}
+
+	if len(resources) == 0 && len(templates) == 0 && len(toolEntries) == 0 {
+		return fmt.Errorf("server has no resources or tools")
 	}
 
 	scheme := "mcp"
@@ -395,18 +451,38 @@ func Mount(mountpoint string, client *mcpclient.Client, debug bool) error {
 
 	tree := BuildTree(scheme, resources, templates)
 
+	// Merge tool-backed entries (tools fill gaps — don't override resources)
+	toolTree := toolfs.BuildToolTree(toolEntries)
+	for name, node := range toolTree {
+		if _, exists := tree.children[name]; exists {
+			continue // resource takes priority
+		}
+		child := newFSTree()
+		child.toolName = node.ToolName
+		if node.IsDir {
+			child.isDir = true
+			child.template = "tool"
+			if len(node.RequiredParams) > 0 {
+				child.param = node.RequiredParams[0]
+			}
+			child.toolParams = node.RequiredParams
+		}
+		tree.children[name] = child
+	}
+
 	root := &dirNode{
 		fsys: &mcpFS{
-			client: client,
-			scheme: scheme,
-			tree:   tree,
+			client:     client,
+			toolCaller: client,
+			scheme:     scheme,
+			tree:       tree,
 		},
 		tree:        tree,
 		paramValues: make(map[string]string),
 	}
 
-	fmt.Fprintf(os.Stderr, "mcpfs: mounting %s:// at %s (%d resources, %d templates)\n",
-		scheme, mountpoint, len(resources), len(templates))
+	fmt.Fprintf(os.Stderr, "mcpfs: mounting %s:// at %s (%d resources, %d templates, %d tools)\n",
+		scheme, mountpoint, len(resources), len(templates), len(toolEntries))
 
 	opts := &gofuse.Options{
 		MountOptions: fuse.MountOptions{
