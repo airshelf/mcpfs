@@ -103,12 +103,14 @@ mcpfs auto           # discover + mount all plugins
 mcpfs auto --json    # print discovered config (dry run)
 ```
 
-It reads:
-- `~/.claude/plugins/installed_plugins.json` — which plugins are installed
-- Each plugin's `.mcp.json` — server command/URL
+It reads from all Claude Code config sources:
+- `~/.claude.json` → `mcpServers` — global user-configured servers
+- `~/.claude/plugins/` — installed plugins and their `.mcp.json`
+- `~/.claude/settings.json` → `enabledPlugins` — also scans cache for these
 - `~/.claude/.credentials.json` — OAuth tokens (Notion, etc.)
-- `~/.config/mcpfs/env` — fallback env vars (API keys)
 - `~/.config/mcpfs/servers.json` — additional user-defined servers
+- `~/.config/mcpfs/env` — fallback env vars (API keys)
+- `gh auth token` — GitHub token fallback
 
 Non-data plugins (playwright, serena, context7) are skipped automatically.
 
