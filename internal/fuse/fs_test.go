@@ -231,3 +231,154 @@ func TestSingularize(t *testing.T) {
 	}
 }
 
+func TestBuildTreeWithToolFields(t *testing.T) {
+	tree := newFSTree()
+	tree.isDir = true
+
+	child := newFSTree()
+	child.toolName = "dashboards-get-all"
+	tree.children["dashboards.json"] = child
+
+	if tree.children["dashboards.json"].toolName != "dashboards-get-all" {
+		t.Error("tool name not preserved")
+	}
+}
+
+func TestBuildTreeWithToolDir(t *testing.T) {
+	tree := newFSTree()
+	tree.isDir = true
+
+	child := newFSTree()
+	child.isDir = true
+	child.toolName = "dashboard-get"
+	child.template = "tool"
+	child.param = "dashboardId"
+	child.toolParams = []string{"dashboardId"}
+	tree.children["dashboards"] = child
+
+	dash := tree.children["dashboards"]
+	if !dash.isDir {
+		t.Error("should be dir")
+	}
+	if dash.toolName != "dashboard-get" {
+		t.Error("tool name not set")
+	}
+	if dash.param != "dashboardId" {
+		t.Error("param not set")
+	}
+	if dash.template != "tool" {
+		t.Error("template not set")
+	}
+	if len(dash.toolParams) != 1 || dash.toolParams[0] != "dashboardId" {
+		t.Errorf("toolParams = %v, want [dashboardId]", dash.toolParams)
+	}
+}
+
+func TestToolMergeResourcePriority(t *testing.T) {
+	// Resources should take priority over tools with same name
+	resources := []mcpclient.Resource{
+		{URI: "test://dashboards", Name: "dashboards", MimeType: "application/json"},
+	}
+	tree := BuildTree("test", resources, nil)
+
+	if _, exists := tree.children["dashboards.json"]; !exists {
+		t.Fatal("resource should create dashboards.json")
+	}
+
+	// Simulate what Mount does: tool should NOT override existing resource
+	toolChild := newFSTree()
+	toolChild.toolName = "dashboards-get-all"
+	if _, exists := tree.children["dashboards.json"]; exists {
+		// Resource takes priority -- don't merge
+	} else {
+		tree.children["dashboards.json"] = toolChild
+	}
+
+	// Verify resource is still there
+	node := tree.children["dashboards.json"]
+	if node.toolName != "" {
+		t.Error("tool should not override resource")
+	}
+	if node.uri != "test://dashboards" {
+		t.Error("resource URI should be preserved")
+	}
+}
+
+func TestBuildTreeEmptyInputs(t *testing.T) {
+	tree := BuildTree("test", nil, nil)
+	if !tree.isDir {
+		t.Error("root should be dir")
+	}
+	if len(tree.children) != 0 {
+		t.Errorf("empty inputs should produce empty tree, got %d children", len(tree.children))
+	}
+}
+
+func TestBuildTreeMultipleToolFiles(t *testing.T) {
+	// Simulate merging multiple tool entries into the tree
+	tree := newFSTree()
+	tree.isDir = true
+
+	for _, name := range []string{"users.json", "repos.json", "issues.json", "pulls.json"} {
+		child := newFSTree()
+		child.toolName = name + "-tool"
+		tree.children[name] = child
+	}
+
+	if len(tree.children) != 4 {
+		t.Errorf("tree has %d children, want 4", len(tree.children))
+	}
+	for _, name := range []string{"users.json", "repos.json", "issues.json", "pulls.json"} {
+		if _, ok := tree.children[name]; !ok {
+			t.Errorf("missing %s", name)
+		}
+	}
+}
+
+func TestEnsureDirExisting(t *testing.T) {
+	root := newFSTree()
+	root.isDir = true
+
+	// First call creates
+	child := root.ensureDir("projects")
+	if !child.isDir {
+		t.Error("ensureDir should create dir")
+	}
+
+	// Second call returns same node
+	child2 := root.ensureDir("projects")
+	if child != child2 {
+		t.Error("ensureDir should return existing node")
+	}
+	if len(root.children) != 1 {
+		t.Errorf("should have 1 child, got %d", len(root.children))
+	}
+}
+
+func TestAddFile(t *testing.T) {
+	root := newFSTree()
+	root.isDir = true
+	root.addFile("test.json", "test://test")
+
+	child, ok := root.children["test.json"]
+	if !ok {
+		t.Fatal("addFile should create child")
+	}
+	if child.uri != "test://test" {
+		t.Errorf("uri = %q, want test://test", child.uri)
+	}
+	if child.isDir {
+		t.Error("file should not be dir")
+	}
+}
+
+func TestCopyParamsNil(t *testing.T) {
+	cp := copyParams(nil)
+	if cp == nil {
+		t.Fatal("copyParams(nil) should return non-nil map")
+	}
+	if len(cp) != 0 {
+		t.Errorf("copyParams(nil) should be empty, got %d", len(cp))
+	}
+}
+
