@@ -94,6 +94,24 @@ bin/mcpfs-mount        # mount all
 bin/mcpfs-mount -u     # unmount all
 ```
 
+## Auto-discover Claude Code plugins
+
+If you use Claude Code, `mcpfs auto` discovers all installed MCP plugins and mounts them automatically:
+
+```bash
+mcpfs auto           # discover + mount all plugins
+mcpfs auto --json    # print discovered config (dry run)
+```
+
+It reads:
+- `~/.claude/plugins/installed_plugins.json` — which plugins are installed
+- Each plugin's `.mcp.json` — server command/URL
+- `~/.claude/.credentials.json` — OAuth tokens (Notion, etc.)
+- `~/.config/mcpfs/env` — fallback env vars (API keys)
+- `~/.config/mcpfs/servers.json` — additional user-defined servers
+
+Non-data plugins (playwright, serena, context7) are skipped automatically.
+
 ## Cross-service composition
 
 ```bash
