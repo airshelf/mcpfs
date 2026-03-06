@@ -17,9 +17,10 @@ import (
 // mcpFS is the root FUSE inode.
 type mcpFS struct {
 	gofuse.Inode
-	client *mcpclient.Client
-	scheme string
-	tree   *fsTree
+	client     *mcpclient.Client
+	toolCaller ToolCaller
+	scheme     string
+	tree       *fsTree
 }
 
 // fsTree represents the filesystem structure built from MCP resources.
